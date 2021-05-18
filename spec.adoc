@@ -1,0 +1,47 @@
+= the wizdb container format
+:toc:
+Torben Schinke
+
+== Motivation
+The wizdb container format is a generic binary specification suited to
+create custom file formats. It serves as a container for organizing multiple data formats. A typical usage scenario is
+to replace the zip-format as a container, so instead of misusing zip files as container for e.g. *.docx or *.xlsx
+files, it provides more efficient low level operations for headers, segments, transactions and migrations.
+
+== General
+All generic data types are in little endian order. As of today, all relevant major architectures are driven in
+little endian mode, like Intel or Apples ARM processors, so that seems like a natural fit. However, if
+the format is used on a big endian architecture, the according transformation must be respected by an implementation.
+
+== Header
+The header is always located at offset 0 (or block index 0) and only ever written once and never overwritten again.
+It contains the magic bytes to identify the container format itself and the subformat for the actual application.
+
+[cols="1,1,1,1,5",options="header"]
+|===
+| Offset | Size | Type       | Value | Description
+| 0      | 6    | [6]byte    | 'wizdbc' | The signature (magic identifier, node type = 119 ) +
+| 6      | 2    | uint16     | 1 | The headers version +
+| 7      | 1    | enum       |  | 0 = plain, 1 = 256-bit AES-GCM +
+| 7      | 32   | [32]byte       |  | random salt +
+| 7      | 32   | [32]byte       |  | PBKDF2 derived 32 byte key using 100,000 iterations +
+| 8      |16    | UUID       |   | UUID type 4 to identify the subformat +
+|16      | 4    | uint32     |  | Block size, e.g. 512 or 4096. Best to fit storage system. +
+|20      | 8    | uint64     |  | Block index to the superblock #0 +
+|28      | 8    | uint64     |  | Block index to the superblock #1 +
+|36      | 8    | uint64     |  | Block index to the superblock #2 +
+|44      | 8    | uint64     |  | Block index to the superblock #3 +
+|42      | ...   | undefined |  | filled with zeros until block #1. +
+|===
+
+
+== Superblock
+There are multiple superblocks (currently exactly 4) at arbitrary block positions. Superblocks are treated
+like a ring buffer and are overwritten in a round-robin manner. The superblock with the highest transaction number
+and valid checksum is the superblock to use.
+
+[cols="1,1,1,1,5",options="header"]
+|===
+| Offset | Size | Type       | Value | Description
+| 0      | 1    | byte       | 's' | magic node type = 115 +
+|===
