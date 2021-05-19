@@ -3,17 +3,55 @@
 Torben Schinke
 
 == Motivation
-The wizdb container format is a generic binary specification suited to
-create custom file formats. It serves as a container for organizing multiple data formats. A typical usage scenario is
-to replace the zip-format as a container, so instead of misusing zip files as container for e.g. *.docx or *.xlsx
-files, it provides more efficient low level operations for headers, segments, transactions and migrations.
+
+The wizdb container format is a generic binary specification suited to create custom file formats.
+It serves as a container for organizing multiple data formats.
+A typical usage scenario is to replace the zip-format as a container, so instead of misusing zip files as a container for e.g. *.docx or *.xlsx files or inventing proprietary things (*.psd), a format which has been build for that purpose should be used.
+Required high level operations are
+
+* mark the beginning of a transaction/snapshot
+* write a stream
+* read a stream
+* delete a stream
+* seek a stream
+* list all available streams
+* mark the end of a transaction/snapshot
+* remove transaction/snapshot
+* collect garbage
+* inspect all available transactions/snapshots
 
 == General
-All generic data types are in little endian order. As of today, all relevant major architectures are driven in
-little endian mode, like Intel or Apples ARM processors, so that seems like a natural fit. However, if
-the format is used on a big endian architecture, the according transformation must be respected by an implementation.
+
+All generic data types are in little endian order.
+As of today, all relevant major architectures are driven in little endian mode, like Intel or Apples ARM processors, so that seems like a natural fit.
+However, if the format is used on a big endian architecture, the according transformation must be respected by an implementation.
+Variable integer encodings follow the protobuf rules footnote:[https://developers.google.com/protocol-buffers/docs/encoding].
+
+
+=== Assumptions
+
+* A block needs not to match the physical sector size of the hardware. There is no way to determine that.
+* Hence, we cannot assume that writing a block is neither atomic nor linear. If a block does not align
+with the physical hardware, a write cannot be guaranteed to be linear.
+* Also, we cannot assume that writing multiple blocks in a specific order, will also be persisted in that order.
+This means, that a crash may result in an arbitrary order of updated blocks, due to reordering of the filesystem and
+the physical drive.
+* Bit rot is a problem of the device and filesystem, which we don't care about (for now).
+* The _fsync_ syscall must guarantee that all changes to the file (file length, appended data and updated blocks)
+are persisted properly after returning.
+* Updating a files' length may introduce arbitrary garbage in the newly allocated area.
+
+=== Concept
+
+The core principle is that the container stores all modifications in a log-based way, by just appending to the file.
+However, to avoid an ever-growing file, the implementation may decide to overwrite unreferenced blocks. Taking the
+assumptions, we need a bunch of _fsyncs_ to guarantee consistency.
+
+`(append|update block)+, fsync, update n-superblock, fsync`
+
 
 == Header
+
 The header is always located at offset 0 (or block index 0) and only ever written once and never overwritten again.
 It contains the magic bytes to identify the container format itself and the subformat for the actual application.
 
@@ -22,26 +60,34 @@ It contains the magic bytes to identify the container format itself and the subf
 | Offset | Size | Type       | Value | Description
 | 0      | 6    | [6]byte    | 'wizdbc' | The signature (magic identifier, node type = 119 ) +
 | 6      | 2    | uint16     | 1 | The headers version +
-| 7      | 1    | enum       |  | 0 = plain, 1 = 256-bit AES-GCM +
-| 7      | 32   | [32]byte       |  | random salt +
-| 7      | 32   | [32]byte       |  | PBKDF2 derived 32 byte key using 100,000 iterations +
 | 8      |16    | UUID       |   | UUID type 4 to identify the subformat +
 |16      | 4    | uint32     |  | Block size, e.g. 512 or 4096. Best to fit storage system. +
 |20      | 8    | uint64     |  | Block index to the superblock #0 +
 |28      | 8    | uint64     |  | Block index to the superblock #1 +
 |36      | 8    | uint64     |  | Block index to the superblock #2 +
 |44      | 8    | uint64     |  | Block index to the superblock #3 +
-|42      | ...   | undefined |  | filled with zeros until block #1. +
+|42      | ...   | unused |  | filled with zeros until block #1. +
 |===
 
-
 == Superblock
-There are multiple superblocks (currently exactly 4) at arbitrary block positions. Superblocks are treated
-like a ring buffer and are overwritten in a round-robin manner. The superblock with the highest transaction number
-and valid checksum is the superblock to use.
+
+There are multiple superblocks (currently exactly 4) at arbitrary block positions.
+Superblocks are treated like a ring buffer and are overwritten in a round-robin manner.
+The superblock with the highest transaction number and valid checksum is the superblock to use.
 
 [cols="1,1,1,1,5",options="header"]
 |===
 | Offset | Size | Type       | Value | Description
 | 0      | 1    | byte       | 's' | magic node type = 115 +
 |===
+
+== Validate against
+
+* https://github.com/openzfs/zfs/pull/4329
+* https://blog.heckel.io/2017/01/08/zfs-encryption-openzfs-zfs-on-linux/
+* https://www.reddit.com/r/crypto/comments/6icr4i/zfs_using_gcm_mode_problem_with_max_plaintext/
+* http://www.giis.co.in/Zfs_ondiskformat.pdf
+* https://blogs.oracle.com/bonwick/space-maps
+* https://www.sqlite.org/atomiccommit.html
+* https://research.cs.wisc.edu/adsl/Publications/alice-osdi14.pdf
+* https://ext4.wiki.kernel.org/index.php/Ext4_Disk_Layout#Linear_.28Classic.29_Directories
